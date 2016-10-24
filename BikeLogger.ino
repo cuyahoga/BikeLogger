@@ -6,11 +6,21 @@
  *
  *********************************************************************/
 #include <SPI.h>
-//#include <Adafruit_GFX.h>        // https://github.com/adafruit/Adafruit-GFX-Library
-//#include <Adafruit_SSD1306.h>    // https://github.com/adafruit/Adafruit_SSD1306
+#include <Adafruit_GFX.h>        // https://github.com/adafruit/Adafruit-GFX-Library
+#include <Adafruit_SSD1306.h>    // https://github.com/adafruit/Adafruit_SSD1306
 #include <SdFat.h>               // https://github.com/greiman/SdFat
 #include <Timer.h>               // https://github.com/JChristensen/Timer
 #include <TinyGPS++.h>           // http://arduiniana.org/libraries/tinygpsplus/
+
+// ===============================================================
+// Adafruit Feather M0 Adalogger             https://www.adafruit.com/products/2796
+// ===============================================================
+const uint8_t chipSelect = 4; // SD chip select pin
+SdFat         sd;
+SdFile        csvFile, gpxFile;
+
+#define error(msg) sd.errorHalt(F(msg))  // Error messages stored in flash
+
 
 // ===============================================================
 // Adafruit MTK3339 Ultimate GPS Breakout    https://www.adafruit.com/products/746
@@ -51,34 +61,15 @@
 // ===============================================================
 // Adafruit SSD1306 128x32 OLED
 // ===============================================================
-/*
-#define OLED_MOSI   6
-#define OLED_CLK    7
-#define OLED_DC     8
-#define OLED_CS     5
-#define OLED_RESET  13
+#define OLED_MOSI   9
+#define OLED_CLK   10
+#define OLED_DC    11
+#define OLED_CS    12
+#define OLED_RESET 6
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 #if (SSD1306_LCDHEIGHT != 32)
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
-*/
-
-// ===============================================================
-// SC Card     http://www.hobbytronics.co.uk/microsd-card-regulated-v2
-//
-//   3V3  ->  3.3V
-//   0V   ->  GND
-//   CLK  ->  D13
-//   D0   ->  D12
-//   DI   ->  D11
-//   CS   ->  D10
-// ===============================================================
-
-const uint8_t chipSelect = 4; // SD chip select pin
-SdFat         sd;
-SdFile        csvFile, gpxFile;
-
-#define error(msg) sd.errorHalt(F(msg))  // Error messages stored in flash
 
 // ===============================================================
 // TinyGPS++
@@ -90,6 +81,17 @@ double          prevLat = 0, prevLng = 0;
 uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 
 // ===============================================================
+// Dates & Times
+// ===============================================================
+
+#define SECS_PER_MIN  (60UL)
+#define SECS_PER_HOUR (3600UL)
+#define SECS_PER_DAY  (SECS_PER_HOUR * 24L)
+#define numberOfSeconds(_time_) (_time_ % SECS_PER_MIN)  
+#define numberOfMinutes(_time_) ((_time_ / SECS_PER_MIN) % SECS_PER_MIN) 
+#define numberOfHours(_time_) (( _time_% SECS_PER_DAY) / SECS_PER_HOUR)
+
+// ===============================================================
 // Misc runtime configuration
 // ===============================================================
 
@@ -97,19 +99,22 @@ uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 #define GPS_DIFF_THRESHOLD  0.0001  // The amount by which both Lat & Lng must differ from prior to be considered movement
 #define GPS_SPEED_THRESHOLD 1.0     // The minimum speed (mph) to be considered movement
 #define SD_CHIPSELECT       10      // The hardware chip select pin
+#define DISPLAY_INTERVAL    250     // Millis between display refreshes
+#define FLIPPER_INTERVAL    5000    // Millis between flipping elapsed time/distance on display
 
-Timer   t;
-int     tickDisplay;
-char    filename[24];
-char    timestamp[21]; 
-
+Timer         t;
+int           tickDisplay, tickLogger, tickFlipper;
+char          filename[24];
+char          timestamp[21]; 
+unsigned long startTime = 0, metresTravelled = 0;
+boolean       timeDistFlipper, logging;
 
 void setup()
 {
   Serial.begin(115200);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
+//  while (!Serial) {
+//    ; // wait for serial port to connect. Needed for native USB port only
+//  }
   Serial.print(F("Catching the GPS state every "));
   Serial.print(LOGGER_INTERVAL / 1000);
   Serial.println(F(" seconds of movement"));
@@ -123,22 +128,11 @@ void setup()
   gps.println(F(PMTK_ENABLE_WAAS));                // enable WAAS for DGPS
   gps.println(F(PGCMD_NOANTENNA));                 // we ain't got no antenna
   Serial.println(F(" complete"));
-
   
   // Set up the 128x32 OLED
-//  display.begin(SSD1306_SWITCHCAPVCC);
-//  display.clearDisplay();
-//  display.setTextSize(1);
-//  display.setTextColor(WHITE);
-//  display.setCursor(0,0);
-//  display.println("Hello, world!");
-//  display.setTextColor(BLACK, WHITE); // 'inverted' text
-//  display.println(3.141592);
-//  display.setTextSize(2);
-//  display.setTextColor(WHITE);
-//  display.print("0x"); display.println(0xDEADBEEF, HEX);
-//  display.display();
-
+  display.begin(SSD1306_SWITCHCAPVCC);
+  display.clearDisplay();
+  display.display();
 
   // Initialize the SD card at SPI_HALF_SPEED to avoid bus errors with
   // breadboards.  use SPI_FULL_SPEED for better performance.
@@ -149,7 +143,9 @@ void setup()
   Serial.println(F(" complete"));
 
   // Start the timer(s)
-  tickDisplay = t.every(LOGGER_INTERVAL, writeLog);
+  tickDisplay = t.every(DISPLAY_INTERVAL, refreshDisplay);
+  tickFlipper = t.every(FLIPPER_INTERVAL, updateFlipper);
+  tickLogger  = t.every(LOGGER_INTERVAL, writeLog);
 }
 
 void loop()
@@ -166,17 +162,130 @@ void loop()
   t.update();
 }
 
+
+// ===============================================================
+// Functions
+// ===============================================================
+
+boolean isGpsLocationValid()
+{
+  return (gpsInfo.location.rawLat().deg > 0 && gpsInfo.location.rawLng().deg > 0);
+}
+
+boolean isGpsDateValid() 
+{
+  return (gpsInfo.date.year() > 0 && gpsInfo.date.month() > 0 && gpsInfo.date.day() > 0);
+}
+
+void updateFlipper()
+{
+  timeDistFlipper = !timeDistFlipper;
+}
+
+void refreshDisplay() {
+
+  char buffer[9];
+  static boolean flipflop;
+  
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 1);
+
+  // Satellites - one block each, solid if we have a location fix
+  for (byte sat = 0; sat < min(gpsInfo.satellites.value(), 12); sat++) 
+  {
+    if (isGpsLocationValid()) 
+    {
+      display.fillRect(1 + (sat * 10), 1, 8, 5, WHITE);
+    } else {
+      display.drawRect(1 + (sat * 10), 1, 8, 5, WHITE);
+    }
+  }
+
+  // Logging - solid circle if we're moving, otherwise just the outline
+  if (logging) 
+  {
+    display.fillCircle(124, 3, 3, WHITE);
+  } else {
+    display.drawCircle(124, 3, 3, WHITE);
+  }
+
+  if (isGpsDateValid()) 
+  {
+    // Current Time
+    renderTime(gpsInfo.time.hour(), gpsInfo.time.minute(), gpsInfo.time.second(), 4, 9);
+    display.setTextSize(1);
+    sprintf(buffer, "%02d-%02d-%02d", gpsInfo.date.day(), gpsInfo.date.month(), gpsInfo.date.year() - 2000);
+    display.setCursor(7, 25);
+    display.print(buffer);
+    
+    if (timeDistFlipper)
+    {
+      // Elapsed Time
+      unsigned long elapsedTime = ((millis() - startTime) / 1000);
+      renderTime(numberOfHours(elapsedTime), numberOfMinutes(elapsedTime), gpsInfo.time.second(), 73, 9);
+      display.setTextSize(1);
+      display.setCursor(78, 25);
+      display.print(F("Elapsed"));
+    } else {
+      // Distance
+      display.setTextSize(2);
+      double distance = _GPS_MILES_PER_METER * metresTravelled / 100.0;
+      display.setCursor(distance < 10 ? 79 : 67, 9); 
+      display.print(_GPS_MILES_PER_METER * metresTravelled / 100.0, 2);
+      display.setTextSize(1);
+      display.setCursor(78, 25);
+      display.print(F("Distance"));
+    }
+  }
+  else 
+  {
+    display.setTextSize(2);
+    display.setCursor(1, 14);
+    display.print(F("Hang on..."));
+  }
+  display.display();
+}
+
+void renderTime(int hour, int minute, int second, int x, int y) 
+{
+  char buffer[3];
+  
+  display.setTextSize(2);
+  sprintf(buffer, "%02d", hour);
+  display.setCursor(x, y);
+  display.print(buffer);
+  if (second % 2 == 0) 
+  {
+    display.setCursor(x + 21, y);
+    display.print(F(":"));
+  }
+  sprintf(buffer, "%02d", minute);
+  display.setCursor(x + 30, y);
+  display.print(buffer);
+}
+
 void writeLog() 
 {
-  if (gpsInfo.date.isValid() && gpsInfo.time.isValid())
+  if (isGpsDateValid())
   {
     sprintf(timestamp, "%d-%02d-%02dT%02d:%02d:%02dZ", gpsInfo.date.year(), gpsInfo.date.month(), gpsInfo.date.day(), gpsInfo.time.hour(), gpsInfo.time.minute(), gpsInfo.time.second());
 
-    if (gpsInfo.location.isValid()) 
+    if (isGpsLocationValid()) 
     {
       if ((prevLat == 0 && prevLng == 0) || ((fabs(prevLat - gpsInfo.location.lat()) > GPS_DIFF_THRESHOLD && fabs(prevLng - gpsInfo.location.lng()) > GPS_DIFF_THRESHOLD) && gpsInfo.speed.mph() > GPS_SPEED_THRESHOLD)) 
       {
         // We've got movement (or we've just got our first fix)
+        logging = true;
+        if (startTime == 0) 
+        {
+          startTime = millis();
+        }
+        if (prevLat != 0 && prevLng != 0) 
+        {
+          metresTravelled += TinyGPSPlus::distanceBetween(gpsInfo.location.lat(), gpsInfo.location.lng(), prevLat, prevLng);
+        }
         prevLat          = gpsInfo.location.lat();
         prevLng          = gpsInfo.location.lng();
         prevMovementTime = millis();
@@ -200,6 +309,7 @@ void writeLog()
         reportSatsAndHdop();
       } else {
         // We haven't moved 
+        logging = false;
         if ((millis() - prevMovementTime) < 59000)
         {
           // Do nothing, as it's not been a minute
@@ -307,7 +417,7 @@ void openGPX()
       Serial.println(filename);
       if (!gpxExists) {
         gpxFile.println(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        gpxFile.println(F("<gpx creator=\"BikeLogger\" version=\"1.1\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">"));
+        gpxFile.println(F("<gpx creator=\"BikeLogger\" version=\"1.1\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v2\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v2 http://www.garmin.com/xmlschemas/TrackPointExtensionv2.xsd\">"));
         gpxFile.println(F("  <metadata>"));
         gpxFile.print(F("    <time>"));
         gpxFile.print(timestamp);
