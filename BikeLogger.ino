@@ -9,13 +9,17 @@
 #include <Adafruit_GFX.h>        // https://github.com/adafruit/Adafruit-GFX-Library
 #include <Adafruit_SSD1306.h>    // https://github.com/adafruit/Adafruit_SSD1306
 #include <SdFat.h>               // https://github.com/greiman/SdFat
+#include <TimeLib.h>             // https://github.com/PaulStoffregen/Time
 #include <Timer.h>               // https://github.com/JChristensen/Timer
+#include <Timezone.h>            // https://github.com/JChristensen/Timezone
 #include <TinyGPS++.h>           // http://arduiniana.org/libraries/tinygpsplus/
 
 // ===============================================================
 // Adafruit Feather M0 Adalogger             https://www.adafruit.com/products/2796
 // ===============================================================
 const uint8_t chipSelect = 4; // SD chip select pin
+const uint8_t LED_GREEN  = 8;
+const uint8_t LED_RED    = 13;
 SdFat         sd;
 SdFile        csvFile, gpxFile;
 
@@ -91,6 +95,10 @@ uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 #define numberOfMinutes(_time_) ((_time_ / SECS_PER_MIN) % SECS_PER_MIN) 
 #define numberOfHours(_time_) (( _time_% SECS_PER_DAY) / SECS_PER_HOUR)
 
+TimeChangeRule tcrBST = {"BST", Last, Sun, Mar, 1, 60};    // British Summer Time = UTC + 1 hour
+TimeChangeRule tcrGMT = {"GMT", Last, Sun, Oct, 1, 0};     // Greenwich Mean Time = UTC
+Timezone tzGMT(tcrBST, tcrGMT);
+
 // ===============================================================
 // Misc runtime configuration
 // ===============================================================
@@ -118,6 +126,10 @@ void setup()
   Serial.print(F("Catching the GPS state every "));
   Serial.print(LOGGER_INTERVAL / 1000);
   Serial.println(F(" seconds of movement"));
+
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  t.oscillate(LED_RED, 1000, HIGH);
 
   // Set up the GPS (might as well do it here in case the battery backup on the unit expired and nobody noticed)
   Serial.print(F("Initialising the GPS..."));
@@ -214,6 +226,7 @@ void refreshDisplay() {
   if (isGpsDateValid()) 
   {
     // Current Time
+    //TODO: call tmConvert_t() to create a time_t, pass that to tzGMT.toLocal() and then use resultant hour value
     renderTime(gpsInfo.time.hour(), gpsInfo.time.minute(), gpsInfo.time.second(), 4, 9);
     display.setTextSize(1);
     sprintf(buffer, "%02d-%02d-%02d", gpsInfo.date.day(), gpsInfo.date.month(), gpsInfo.date.year() - 2000);
@@ -470,4 +483,17 @@ void writeGPX()
     }
   }
 }
+
+time_t tmConvert_t(int YYYY, byte MM, byte DD, byte hh, byte mm, byte ss)
+{
+  tmElements_t tmSet;
+  tmSet.Year = YYYY - 1970;
+  tmSet.Month = MM;
+  tmSet.Day = DD;
+  tmSet.Hour = hh;
+  tmSet.Minute = mm;
+  tmSet.Second = ss;
+  return makeTime(tmSet);         //convert to time_t
+}
+
 
