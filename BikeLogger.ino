@@ -9,7 +9,7 @@
 #include <SoftwareSerial.h>
 #include <SdFat.h>               // https://github.com/greiman/SdFat
 #include <Timer.h>               // https://github.com/JChristensen/Timer
-#include <TinyGPS++.h>           // http://arduiniana.org/libraries/tinygpsplus/
+#include <TinyGPS.h>             // http://arduiniana.org/libraries/tinygps/
 
 static const int RXPin = 3, TXPin = 2;
 static const uint32_t GPSBaud = 9600;
@@ -18,8 +18,8 @@ static const uint32_t GPSBaud = 9600;
 const uint8_t chipSelect = SS;
 
 
-// The TinyGPS++ object
-TinyGPSPlus gps;
+// The TinyGPS object
+TinyGPS gps;
 
 // The serial connection to the GPS device
 SoftwareSerial ss(RXPin, TXPin);
@@ -32,6 +32,12 @@ Timer   t;
 int     tickDisplay;
 char    filename[24];
 char    timestamp[21]; 
+
+float         flat, flon, altitude, speed, course;
+unsigned long age;
+int           satellites;
+int           year;
+byte          month, day, hour, minute, second, hundredths;
 
 SdFat   sd;
 SdFile  csvFile, gpxFile;
@@ -61,7 +67,18 @@ void loop()
 {
   // Dispatch incoming characters
   while (ss.available() > 0)
-    gps.encode(ss.read());
+  {
+    if (gps.encode(ss.read())) 
+    {
+      gps.f_get_position(&flat, &flon, &age);
+      satellites = gps.satellites();
+      altitude = gps.f_altitude();
+      speed = gps.f_speed_mps();
+      course = gps.f_course();
+      gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
+      sprintf(timestamp, "%d-%02d-%02dT%02d:%02d:%02dZ", year, month, day, hour, minute, second);
+    }
+  }
 
   // See if it's time to act on a timer
   t.update();
@@ -69,29 +86,29 @@ void loop()
 
 void writeLog() 
 {
-  if (gps.location.isValid())
-  {
-    sprintf(timestamp, "%d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+//  if (gps.location.isValid())
+//  {
+//    sprintf(timestamp, "%d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
     writeCSV();
     writeGPX();
     // Write the same output to the console
     Serial.print(timestamp);
     Serial.print(F(","));
-    Serial.print(gps.location.lat(), 6);
+    Serial.print(flat, 10);
     Serial.print(F(","));
-    Serial.print(gps.location.lng(), 6);
+    Serial.print(flon, 10);
     Serial.print(F(","));
-    Serial.print(gps.speed.mph());
+    Serial.print(speed);
     Serial.print(F(","));
-    Serial.print(gps.course.deg());
+    Serial.print(course);
     Serial.print(F(","));
-    Serial.print(gps.altitude.feet());
+    Serial.print(altitude);
     Serial.print(F(","));
-    Serial.println(gps.satellites.value());
-  } else {
-    Serial.print(F("Awaiting fix - current satellites : "));
-    Serial.println(gps.satellites.value());
-  }
+    Serial.println(satellites);
+//  } else {
+//    Serial.print(F("Awaiting fix - current satellites : "));
+//    Serial.println(satellites);
+//  }
 }
 
 void openCSV() 
@@ -99,7 +116,7 @@ void openCSV()
   boolean csvExists;
   
   if (!csvFile.isOpen()) {
-    sprintf(filename, "BikeLogger-%04d%02d%02d.csv", gps.date.year(), gps.date.month(), gps.date.day());
+    sprintf(filename, "BikeLogger-%04d%02d%02d.csv", year, month, day);
     csvExists = sd.exists(filename); 
     if (!csvFile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
       error("csvfile.open");
@@ -120,17 +137,17 @@ void writeCSV()
   if (csvFile.isOpen()) {
     csvFile.print(timestamp);
     csvFile.print(F(","));
-    csvFile.print(gps.location.lat(), 6);
+    csvFile.print(flat, 6);
     csvFile.print(F(","));
-    csvFile.print(gps.location.lng(), 6);
+    csvFile.print(flon, 6);
     csvFile.print(F(","));
-    csvFile.print(gps.speed.mph());
+    csvFile.print(speed);
     csvFile.print(F(","));
-    csvFile.print(gps.course.deg());
+    csvFile.print(course);
     csvFile.print(F(","));
-    csvFile.print(gps.altitude.meters());
+    csvFile.print(altitude);
     csvFile.print(F(","));
-    csvFile.print(gps.satellites.value());
+    csvFile.print(satellites);
     csvFile.println();
 
     // Force data to SD and update the directory entry to avoid data loss.
@@ -145,7 +162,7 @@ void openGPX()
   boolean gpxExists;
 
   if (!gpxFile.isOpen()) {
-    sprintf(filename, "BikeLogger-%04d%02d%02d.gpx", gps.date.year(), gps.date.month(), gps.date.day());
+    sprintf(filename, "BikeLogger-%04d%02d%02d.gpx", year, month, day);
     gpxExists = sd.exists(filename); 
 
     if (!gpxFile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
@@ -177,11 +194,11 @@ void writeGPX()
   if (gpxFile.isOpen()) {
     gpxFile.seekEnd(-33);
     gpxFile.print(F("      <trkpt lat=\""));
-    gpxFile.print(gps.location.lat(), 6);
+    gpxFile.print(flat, 6);
     gpxFile.print(F("\" lon=\""));
-    gpxFile.print(gps.location.lng(), 6);
+    gpxFile.print(flon, 6);
     gpxFile.print(F("\"><ele>"));
-    gpxFile.print(gps.altitude.meters());
+    gpxFile.print(altitude);
     gpxFile.print(F("</ele><time>"));
     gpxFile.print(timestamp);
     gpxFile.println(F("</time></trkpt>"));
