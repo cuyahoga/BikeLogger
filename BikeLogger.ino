@@ -88,8 +88,8 @@ SdFile        csvFile, gpxFile;
 // ===============================================================
 
 TinyGPSPlus     gpsInfo;
-double          prevLat, prevLng;
-uint32_t        prevFixTime = 0;
+double          prevLat = 0, prevLng = 0;
+uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 SoftwareSerial  gps(GPS_RX_PIN, GPS_TX_PIN);  // The serial connection to the GPS device
 
 // ===============================================================
@@ -180,7 +180,8 @@ void writeLog()
         // We've got movement (or we've just got our first fix)
         prevLat     = gpsInfo.location.lat();
         prevLng     = gpsInfo.location.lng();
-        prevFixTime = millis();
+        prevMovementTime = millis();
+        prevStandstillTime = 0;
   
         // Write the position to our log files
         writeCSV();
@@ -203,9 +204,10 @@ void writeLog()
         Serial.print(F("  HDOP: "));
         Serial.println(gpsInfo.hdop.value());
       } else {
-        if ((millis() - prevFixTime) > 60000) 
+        if (/*(millis() - prevMovementTime) > 60000 &&*/ (prevStandstillTime == 0 || (millis() - prevStandstillTime) > 600000)) 
         {
           // No need to say that we haven't moved more than once a minute
+          prevStandstillTime = millis();
           Serial.print(timestamp);
           Serial.print(F("  No change in position - Sats: "));
           Serial.print(gpsInfo.satellites.value());
