@@ -1,12 +1,11 @@
 /*********************************************************************
  *
- * BikeLogger
+ * BikeLogger for M0
  *
  * http://blog.cuyahoga.co.uk/bikelogger
  *
  *********************************************************************/
 #include <SPI.h>
-#include <SoftwareSerial.h>
 //#include <Adafruit_GFX.h>        // https://github.com/adafruit/Adafruit-GFX-Library
 //#include <Adafruit_SSD1306.h>    // https://github.com/adafruit/Adafruit_SSD1306
 #include <SdFat.h>               // https://github.com/greiman/SdFat
@@ -18,12 +17,10 @@
 //
 //   VIN  ->  3.3V
 //   GND  ->  GND
-//   RX   ->  D2
-//   TX   ->  D3
+//   RX   ->  D0
+//   TX   ->  D1
 // ===============================================================
 #define GPS_BAUD    9600
-#define GPS_RX_PIN  3
-#define GPS_TX_PIN  2
 
 // To generate any other command sentences, check out the MTK command datasheet and use a checksum calculator such as http://www.hhhh.org/wiml/proj/nmeaxor.html
 // different commands to set the update rate from once a second (1 Hz) to 10 times a second (10Hz)
@@ -77,7 +74,7 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 //   CS   ->  D10
 // ===============================================================
 
-const uint8_t chipSelect = SS; // SD chip select pin.  Be sure to disable any other SPI devices such as Enet.
+const uint8_t chipSelect = 4; // SD chip select pin
 SdFat         sd;
 SdFile        csvFile, gpxFile;
 
@@ -88,9 +85,9 @@ SdFile        csvFile, gpxFile;
 // ===============================================================
 
 TinyGPSPlus     gpsInfo;
+#define         gps Serial1
 double          prevLat = 0, prevLng = 0;
 uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
-SoftwareSerial  gps(GPS_RX_PIN, GPS_TX_PIN);  // The serial connection to the GPS device
 
 // ===============================================================
 // Misc runtime configuration
@@ -110,6 +107,9 @@ char    timestamp[21];
 void setup()
 {
   Serial.begin(115200);
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
+  }
   Serial.print(F("Catching the GPS state every "));
   Serial.print(LOGGER_INTERVAL / 1000);
   Serial.println(F(" seconds of movement"));
@@ -143,13 +143,12 @@ void setup()
   // Initialize the SD card at SPI_HALF_SPEED to avoid bus errors with
   // breadboards.  use SPI_FULL_SPEED for better performance.
   Serial.print(F("Initialising the SD card..."));
-  if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
+  if (!sd.begin(chipSelect, SPI_FULL_SPEED)) {
     sd.initErrorHalt();
   }
   Serial.println(F(" complete"));
 
-  // Do anything else that needs done, I guess
-  
+  // Start the timer(s)
   tickDisplay = t.every(LOGGER_INTERVAL, writeLog);
 }
 
@@ -158,11 +157,11 @@ void loop()
   // Dispatch incoming characters
   while (gps.available() > 0)
     gpsInfo.encode(gps.read());
-//  while (Serial1.available()) {
-//    char c = Serial1.read();
-//    gpsInfo.encode(c);
-//  }
-    
+
+
+  // Do anything else that needs done, I guess
+
+  
   // See if it's time to act on a timer
   t.update();
 }
@@ -178,16 +177,15 @@ void writeLog()
       if ((prevLat == 0 && prevLng == 0) || ((fabs(prevLat - gpsInfo.location.lat()) > GPS_DIFF_THRESHOLD && fabs(prevLng - gpsInfo.location.lng()) > GPS_DIFF_THRESHOLD) && gpsInfo.speed.mph() > GPS_SPEED_THRESHOLD)) 
       {
         // We've got movement (or we've just got our first fix)
-        prevLat     = gpsInfo.location.lat();
-        prevLng     = gpsInfo.location.lng();
+        prevLat          = gpsInfo.location.lat();
+        prevLng          = gpsInfo.location.lng();
         prevMovementTime = millis();
-        prevStandstillTime = 0;
   
         // Write the position to our log files
         writeCSV();
         writeGPX();
       
-        // Write the position to the console
+        // Report the position to the console
         Serial.print(timestamp);
         Serial.print(F("  "));
         Serial.print(gpsInfo.location.lat(), 6);
@@ -199,20 +197,30 @@ void writeLog()
         Serial.print(gpsInfo.course.deg());
         Serial.print(F("  Alt: "));
         Serial.print(gpsInfo.altitude.feet());
-        Serial.print(F("  Sats: "));
-        Serial.print(gpsInfo.satellites.value());
-        Serial.print(F("  HDOP: "));
-        Serial.println(gpsInfo.hdop.value());
+        reportSatsAndHdop();
       } else {
-        if (/*(millis() - prevMovementTime) > 60000 &&*/ (prevStandstillTime == 0 || (millis() - prevStandstillTime) > 600000)) 
+        // We haven't moved 
+        if ((millis() - prevMovementTime) < 59000)
         {
-          // No need to say that we haven't moved more than once a minute
-          prevStandstillTime = millis();
-          Serial.print(timestamp);
-          Serial.print(F("  No change in position - Sats: "));
-          Serial.print(gpsInfo.satellites.value());
-          Serial.print(F("  HDOP: "));
-          Serial.println(gpsInfo.hdop.value());
+          // Do nothing, as it's not been a minute
+          prevStandstillTime = 0;
+        } 
+        else 
+        {
+          // It's been at least a minute since we moved
+          if (prevStandstillTime == 0) 
+          {
+            // Report no movement
+            reportNoMovement();
+          } 
+          else 
+          {
+            if ((millis() - prevStandstillTime) >= 60000) 
+            {
+              // Report no movement
+              reportNoMovement();
+            }
+          }
         }
       }
     }
@@ -220,6 +228,22 @@ void writeLog()
     Serial.print(F("Awaiting fix - current satellites : "));
     Serial.println(gpsInfo.satellites.value());
   }
+}
+
+void reportNoMovement()
+{
+  prevStandstillTime = millis();
+  Serial.print(timestamp);
+  Serial.print(F("  No change in position -"));
+  reportSatsAndHdop();
+}
+
+void reportSatsAndHdop()
+{
+  Serial.print(F("  Sats: "));
+  Serial.print(gpsInfo.satellites.value());
+  Serial.print(F("  HDOP: "));
+  Serial.println(gpsInfo.hdop.value());
 }
 
 void openCSV() 
