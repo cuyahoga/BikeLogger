@@ -95,8 +95,8 @@ uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 // Misc runtime configuration
 // ===============================================================
 
-#define LOGGER_INTERVAL     5000    // Millis between log writes
-#define GPS_DIFF_THRESHOLD  0.0001  // The amount by which both Lat & Lng must differ from prior to be considered movement
+#define LOGGER_INTERVAL     2000    // Millis between log writes during movement
+#define GPS_DIFF_THRESHOLD  0.00005 // The amount by which both Lat & Lng must differ from prior to be considered movement
 #define GPS_SPEED_THRESHOLD 1.0     // The minimum speed (mph) to be considered movement
 #define SD_CHIPSELECT       10      // The hardware chip select pin
 #define DISPLAY_INTERVAL    250     // Millis between display refreshes
@@ -231,9 +231,9 @@ void refreshDisplay() {
     } else {
       // Distance
       display.setTextSize(2);
-      double distance = _GPS_MILES_PER_METER * metresTravelled / 100.0;
+      double distance = _GPS_MILES_PER_METER * metresTravelled;
       display.setCursor(distance < 10 ? 79 : 67, 9); 
-      display.print(_GPS_MILES_PER_METER * metresTravelled / 100.0, 2);
+      display.print(distance, 2);
       display.setTextSize(1);
       display.setCursor(78, 25);
       display.print(F("Distance"));
@@ -417,7 +417,7 @@ void openGPX()
       Serial.println(filename);
       if (!gpxExists) {
         gpxFile.println(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        gpxFile.println(F("<gpx creator=\"BikeLogger\" version=\"1.1\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v2\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v2 http://www.garmin.com/xmlschemas/TrackPointExtensionv2.xsd\">"));
+        gpxFile.println(F("<gpx creator=\"BikeLogger\" version=\"1.1\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">"));
         gpxFile.println(F("  <metadata>"));
         gpxFile.print(F("    <time>"));
         gpxFile.print(timestamp);
