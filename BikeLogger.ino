@@ -25,16 +25,16 @@ TinyGPSPlus gps;
 SoftwareSerial ss(RXPin, TXPin);
 
 // Runtime configuration
-#define LOGGER_INTERVAL     5000   // Millis between log writes
+#define LOGGER_INTERVAL     10000   // Millis between log writes
 #define SD_CHIPSELECT       10     // The hardware chip select pin
 
 Timer   t;
 int     tickDisplay;
-char    filename[20];
-char    buffer[20]; 
+char    filename[24];
+char    timestamp[21]; 
 
-SdFat   sd;       // File system object
-SdFile  logfile;  // Log file
+SdFat   sd;
+SdFile  csvFile, gpxFile;
 
 // Error messages stored in flash.
 #define error(msg) sd.errorHalt(F(msg))
@@ -67,64 +67,132 @@ void loop()
   t.update();
 }
 
-void writeLog() {
-
+void writeLog() 
+{
   if (gps.location.isValid())
   {
-
-    if (!logfile.isOpen()) {
-      sprintf(filename, "GPSLog-%04d%02d%02d.csv", gps.date.year(), gps.date.month(), gps.date.day());
-      if (!logfile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
-        error("file.open");
-      } else {
-        Serial.print(F("Logging to "));
-        Serial.println(filename);
-      }
-    }
-    
-    sprintf(buffer, "%d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
-
-    if (logfile.isOpen()) {
-      logfile.print(buffer);
-      logfile.print(F(","));
-      logfile.print(gps.location.lat(), 6);
-      logfile.print(F(","));
-      logfile.print(gps.location.lng(), 6);
-      logfile.print(F(","));
-      logfile.print(gps.speed.mph());
-      logfile.print(F(","));
-      logfile.print(gps.course.deg());
-      logfile.print(F(","));
-      logfile.print(gps.altitude.feet());
-      logfile.print(F(","));
-      logfile.print(gps.satellites.value());
-      logfile.println();
-
-      // Force data to SD and update the directory entry to avoid data loss.
-      if (!logfile.sync() || logfile.getWriteError()) {
-        error("write error");
-      }
-
-      // Write the same output to the console
-      Serial.print(buffer);
-      Serial.print(F(","));
-      Serial.print(gps.location.lat(), 6);
-      Serial.print(F(","));
-      Serial.print(gps.location.lng(), 6);
-      Serial.print(F(","));
-      Serial.print(gps.speed.mph());
-      Serial.print(F(","));
-      Serial.print(gps.course.deg());
-      Serial.print(F(","));
-      Serial.print(gps.altitude.feet());
-      Serial.print(F(","));
-      Serial.print(gps.satellites.value());
-      Serial.println();
-    }
+    sprintf(timestamp, "%d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+    writeCSV();
+    writeGPX();
+    // Write the same output to the console
+    Serial.print(timestamp);
+    Serial.print(F(","));
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(F(","));
+    Serial.print(gps.location.lng(), 6);
+    Serial.print(F(","));
+    Serial.print(gps.speed.mph());
+    Serial.print(F(","));
+    Serial.print(gps.course.deg());
+    Serial.print(F(","));
+    Serial.print(gps.altitude.feet());
+    Serial.print(F(","));
+    Serial.println(gps.satellites.value());
   } else {
-    Serial.print(buffer);
-    Serial.print(F(",,,,,,"));
-    Serial.print(gps.satellites.value());
-    Serial.println();
+    Serial.print(F("Awaiting fix - current satellites : "));
+    Serial.println(gps.satellites.value());
   }
 }
+
+void openCSV() 
+{
+  boolean csvExists;
+  
+  if (!csvFile.isOpen()) {
+    sprintf(filename, "BikeLogger-%04d%02d%02d.csv", gps.date.year(), gps.date.month(), gps.date.day());
+    csvExists = sd.exists(filename); 
+    if (!csvFile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
+      error("csvfile.open");
+    } else {
+      Serial.print(F("Logging to "));
+      Serial.println(filename);
+      if (!csvExists) {
+        csvFile.println(F("Timestamp,Lat,Lon,Speed_MPH,Course_Deg,Altitude_M,Satellites"));
+      }
+    }
+  }
+}
+
+void writeCSV() 
+{
+  openCSV();
+    
+  if (csvFile.isOpen()) {
+    csvFile.print(timestamp);
+    csvFile.print(F(","));
+    csvFile.print(gps.location.lat(), 6);
+    csvFile.print(F(","));
+    csvFile.print(gps.location.lng(), 6);
+    csvFile.print(F(","));
+    csvFile.print(gps.speed.mph());
+    csvFile.print(F(","));
+    csvFile.print(gps.course.deg());
+    csvFile.print(F(","));
+    csvFile.print(gps.altitude.meters());
+    csvFile.print(F(","));
+    csvFile.print(gps.satellites.value());
+    csvFile.println();
+
+    // Force data to SD and update the directory entry to avoid data loss.
+    if (!csvFile.sync() || csvFile.getWriteError()) {
+      error("csv write error");
+    }
+  }
+}
+
+void openGPX() 
+{
+  boolean gpxExists;
+
+  if (!gpxFile.isOpen()) {
+    sprintf(filename, "BikeLogger-%04d%02d%02d.gpx", gps.date.year(), gps.date.month(), gps.date.day());
+    gpxExists = sd.exists(filename); 
+
+    if (!gpxFile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
+      error("gpxfile.open");
+    } else {
+      Serial.print(F("Logging to "));
+      Serial.println(filename);
+      if (!gpxExists) {
+        gpxFile.println(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        gpxFile.println(F("<gpx creator=\"BikeLogger\" version=\"1.1\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">"));
+        gpxFile.println(F("  <metadata>"));
+        gpxFile.println(F("    <time>2016-01-31T14:57:03Z</time>"));
+        gpxFile.println(F("  </metadata>"));
+        gpxFile.println(F("  <trk>"));
+        gpxFile.println(F("    <name>Sample Ride</name>"));
+        gpxFile.println(F("    <trkseg>"));
+        gpxFile.println(F("    </trkseg>"));
+        gpxFile.println(F("  </trk>"));
+        gpxFile.println(F("</gpx>"));
+      }
+    }
+  }
+}
+
+void writeGPX() 
+{
+  openGPX();
+  
+  if (gpxFile.isOpen()) {
+    gpxFile.seekEnd(-33);
+    gpxFile.print(F("      <trkpt lat=\""));
+    gpxFile.print(gps.location.lat(), 6);
+    gpxFile.print(F("\" lon=\""));
+    gpxFile.print(gps.location.lng(), 6);
+    gpxFile.print(F("\"><ele>"));
+    gpxFile.print(gps.altitude.meters());
+    gpxFile.print(F("</ele><time>"));
+    gpxFile.print(timestamp);
+    gpxFile.println(F("</time></trkpt>"));
+    gpxFile.println(F("    </trkseg>"));
+    gpxFile.println(F("  </trk>"));
+    gpxFile.println(F("</gpx>"));
+    
+    // Force data to SD and update the directory entry to avoid data loss.
+    if (!gpxFile.sync() || gpxFile.getWriteError()) {
+      error("gpx write error");
+    }
+  }
+}
+
