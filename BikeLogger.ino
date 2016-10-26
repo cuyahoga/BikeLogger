@@ -17,9 +17,10 @@
 // ===============================================================
 // Adafruit Feather M0 Adalogger             https://www.adafruit.com/products/2796
 // ===============================================================
-const uint8_t chipSelect = 4; // SD chip select pin
-const uint8_t LED_GREEN  = 8;
-const uint8_t LED_RED    = 13;
+#define PIN_SD_CHIPSELECT 4
+#define PIN_LED_GREEN     8
+#define PIN_LED_RED       13
+#define PIN_VBAT          A7
 SdFat         sd;
 SdFile        csvFile, gpxFile;
 
@@ -98,14 +99,16 @@ uint32_t        prevMovementTime = 0, prevStandstillTime = 0;
 TimeChangeRule tcrBST = {"BST", Last, Sun, Mar, 1, 60};    // British Summer Time = UTC + 1 hour
 TimeChangeRule tcrGMT = {"GMT", Last, Sun, Oct, 1, 0};     // Greenwich Mean Time = UTC
 Timezone tzGMT(tcrBST, tcrGMT);
+TimeChangeRule *tcr;        //pointer to the time change rule, use to get TZ abbrev
+time_t utcTime, localTime;
 
 // ===============================================================
 // Misc runtime configuration
 // ===============================================================
 
-#define LOGGER_INTERVAL     2000    // Millis between log writes during movement
-#define GPS_DIFF_THRESHOLD  0.00005 // The amount by which both Lat & Lng must differ from prior to be considered movement
-#define GPS_SPEED_THRESHOLD 1.0     // The minimum speed (mph) to be considered movement
+#define LOGGER_INTERVAL     1000    // Millis between log writes during movement
+#define GPS_DIFF_THRESHOLD  0.00003 // The amount by which both Lat & Lng must differ from prior to be considered movement
+#define GPS_SPEED_THRESHOLD 0.6     // The minimum speed (mph) to be considered movement
 #define SD_CHIPSELECT       10      // The hardware chip select pin
 #define DISPLAY_INTERVAL    250     // Millis between display refreshes
 #define FLIPPER_INTERVAL    5000    // Millis between flipping elapsed time/distance on display
@@ -127,9 +130,9 @@ void setup()
   Serial.print(LOGGER_INTERVAL / 1000);
   Serial.println(F(" seconds of movement"));
 
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
-  t.oscillate(LED_RED, 1000, HIGH);
+  pinMode(PIN_LED_GREEN, OUTPUT);
+  pinMode(PIN_LED_RED, OUTPUT);
+  //t.oscillate(PIN_LED_GREEN, 333, HIGH);
 
   // Set up the GPS (might as well do it here in case the battery backup on the unit expired and nobody noticed)
   Serial.print(F("Initialising the GPS..."));
@@ -149,7 +152,7 @@ void setup()
   // Initialize the SD card at SPI_HALF_SPEED to avoid bus errors with
   // breadboards.  use SPI_FULL_SPEED for better performance.
   Serial.print(F("Initialising the SD card..."));
-  if (!sd.begin(chipSelect, SPI_FULL_SPEED)) {
+  if (!sd.begin(PIN_SD_CHIPSELECT, SPI_FULL_SPEED)) {
     sd.initErrorHalt();
   }
   Serial.println(F(" complete"));
@@ -225,11 +228,11 @@ void refreshDisplay() {
 
   if (isGpsDateValid()) 
   {
-    // Current Time
-    //TODO: call tmConvert_t() to create a time_t, pass that to tzGMT.toLocal() and then use resultant hour value
-    renderTime(gpsInfo.time.hour(), gpsInfo.time.minute(), gpsInfo.time.second(), 4, 9);
+    // Determine the time (that's in UTC from the GPS), accounting for BST if necessary
+    localTime = tzGMT.toLocal(tmConvert_t(gpsInfo.date.year(), gpsInfo.date.month(), gpsInfo.date.day(), gpsInfo.time.hour(), gpsInfo.time.minute(), gpsInfo.time.second()), &tcr);
+    renderTime(hour(localTime), minute(localTime), second(localTime), 4, 9);
     display.setTextSize(1);
-    sprintf(buffer, "%02d-%02d-%02d", gpsInfo.date.day(), gpsInfo.date.month(), gpsInfo.date.year() - 2000);
+    sprintf(buffer, "%02d-%02d-%02d", day(localTime), month(localTime), year(localTime) - 2000);
     display.setCursor(7, 25);
     display.print(buffer);
     
@@ -244,12 +247,23 @@ void refreshDisplay() {
     } else {
       // Distance
       display.setTextSize(2);
-      double distance = _GPS_MILES_PER_METER * metresTravelled;
-      display.setCursor(distance < 10 ? 79 : 67, 9); 
-      display.print(distance, 2);
+//      double distance = _GPS_MILES_PER_METER * metresTravelled;
+//      display.setCursor(distance < 10 ? 79 : 67, 9); 
+//      display.print(distance, 2);
+//      display.setTextSize(1);
+//      display.setCursor(78, 25);
+//      display.print(F("Distance"));
+
+      float measuredvbat = analogRead(PIN_VBAT);
+      measuredvbat *= 2;    // we divided by 2, so multiply back
+      measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
+      measuredvbat /= 1024; // convert to voltage
+//      Serial.print("VBat: " ); Serial.println(measuredvbat);
+      display.setCursor(75, 9);
+      display.print(measuredvbat, 2);
       display.setTextSize(1);
       display.setCursor(78, 25);
-      display.print(F("Distance"));
+      display.print(F("Voltage"));
     }
   }
   else 
